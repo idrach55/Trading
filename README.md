@@ -11,5 +11,5 @@ Other Research
 - Modeling empirical non-normality of one-day stock returns <code>stocks.ipynb</code>
 
 Monte Carlo
-- vanilla option pricing using monte carlo where underlying return process can be non-GBM, <code>mc.py</code> and <code>mc_example.ipynb</code>
+- vanilla option pricing using monte carlo where underlying process can be non-GBM, <code>mc.py</code> and <code>mc_example.ipynb</code>
 - processes include Ornstein-Uhlenbeck (mean-reverting), and GBM+Jump
