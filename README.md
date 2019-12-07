@@ -3,6 +3,7 @@
 Strategy Backtests
 - Jupyter notebooks for simple payoff backtests (i.e. no m2m)
 - capped/uncapped and outright variance selling <code>strat_variance_seller.ipynb</code>
+- 1m variance selling using daily vix for entry level and m2m <code>varswap_with_m2m.ipynb</code>  
 - palladium (call on dispersion) <code>strat_palladium.ipynb</code>
 
 Other Research
