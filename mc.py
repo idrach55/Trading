@@ -1,3 +1,8 @@
+"""
+Author: Isaac Drachman
+Date:   12/15/2019
+"""
+
 import numpy as np
 import copy
 import mcx
@@ -65,6 +70,14 @@ class GBMJD_gen(Generator):
         noise = np.random.normal(size=(num_paths, num_steps))
         poiss = np.random.poisson(lam*dt, size=(num_paths, num_steps)).astype(np.float64)
 
+        """
+        # Original native python
+        paths = np.zeros((num_paths,num_steps)) + S0
+        for t in range(1,num_steps):
+            paths[:,t] = paths[:,t-1]*(1 + (r-q)*dt + sigma*np.sqrt(dt)*noise[:,t] + jump*poiss[:,t])
+        return paths
+        """
+
         return mcx.gbmjd_step(S0, r, q, sigma, jump, dt, num_paths, num_steps, noise, poiss)
 
 class OUJD_gen(Generator):
@@ -84,6 +97,14 @@ class OUJD_gen(Generator):
         noise = np.random.normal(size=(num_paths,num_steps))
         poiss = np.random.poisson(lam*dt, size=(num_paths,num_steps)).astype(np.float64)
 
+        """
+        # Original native python
+        paths = np.zeros((num_paths,num_steps)) + S0
+        for t in range(1,num_steps):
+            paths[:,t] = paths[:,t-1] + theta*(mu - paths[:,t-1])*dt + sigma*np.sqrt(dt)*noise[:,t] + jump*poiss[:,t]
+        return paths
+        """
+
         return mcx.oujd_step(S0, mu, theta, sigma, jump, dt, num_paths, num_steps, noise, poiss)
 
 class Heston_gen(Generator):
@@ -101,6 +122,18 @@ class Heston_gen(Generator):
         dW_S = rands[0]
         dW_X = rands[1]
 
+        """
+        # Original native python
+        paths = np.zeros((num_paths,num_steps)) + S0
+        dW_nu = rho*dW_S + np.sqrt(1 - rho**2)*dW_X
+        nu = np.zeros((num_paths)) + nu0
+        for t in range(1,num_steps):
+            # Since the variance process is discrete, it can take on negative values
+            # Use full truncation, i.e. v_t <- max(v_t,0)
+            nu = nu + kappa*(theta - np.maximum(nu,0))*dt + xi*np.sqrt(np.maximum(nu,0)*dt)*dW_nu[:,t]
+            paths[:,t] = paths[:,t-1]*(1 + (r-q)*dt + np.sqrt(np.maximum(nu,0)*dt)*dW_S[:,t])
+        return paths
+        """
         # Run cython routine
         return mcx.heston_step(S0,nu0,kappa,theta,xi,rho,dt,r,q,num_paths,num_steps,dW_S,dW_X)
 

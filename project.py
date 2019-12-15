@@ -40,8 +40,8 @@ class Calibrator:
 
         # Default MC specs
         if self.val_params == {}:
-            self.val_params['num_paths'] = 75000
-            self.val_params['num_steps'] = 100
+            self.val_params['num_paths'] = 100000
+            self.val_params['num_steps'] = 150
 
         # Generate all the random variables upfront to speed up computation
         # For each iteration of new model params, same initial random variables are used
@@ -73,6 +73,11 @@ class Calibrator:
 
     # Compute one of 3 loss functions
     def loss(self, updates, update_keys, model, market, fixrands=True):
+        # Adds the Feller constraint for DE since constraints not built-in
+        if self.gen_class == mc.Heston_gen and self.val_params['optimizer'] == 'DE':
+            if not mc.feller(updates[1],updates[2],updates[3]):
+                return 10000
+
         # Price all the options
         px = self.evaluate(updates, update_keys, model, fixrands=fixrands)
         if self.val_params['loss'] == 'abserror':
@@ -87,13 +92,17 @@ class Calibrator:
 
     # Gradient descent
     def run_GD(self,x0,bounds,cons,model,update_keys,market,lossfunc='abserror'):
+        self.val_params['optimizer'] = 'GD'
         self.val_params['loss'] = lossfunc
         res = opt.minimize(self.loss, x0, args=(update_keys, model, market), bounds=bounds, constraints=cons)
         return res['x']
 
     # Differential evolution
     def run_DE(self,bounds,model,update_keys,market,lossfunc='abserror',maxiter=50,popsize=15):
+        self.val_params['optimizer'] = 'DE'
         self.val_params['loss'] = lossfunc
+        # The workers=-1 flag uses multiprocessing, and required updating='deferred'
+        # Remove the workers flag and change updating='immediate' if not using multiprocessing
         res = opt.differential_evolution(self.loss, bounds, args=(update_keys, model, market), maxiter=maxiter, popsize=popsize, disp=True, updating='deferred', workers=-1)
         return res['x']
 
@@ -133,8 +142,10 @@ def setup_example(date):
     data = read_data('option_px.csv')
 
     # I've hardcoded the strikes to be fit
-    selection = select_options(data, date, [7500,7600,7800,7900,8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700,8800,8900,9000])
-    #selection = select_options(data, date, [8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700])
+    # 25 options (wide range)
+    #selection = select_options(data, date, [7500,7600,7800,7900,8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700,8800,8900,9000])
+    # 18 options (tight range)
+    selection = select_options(data, date, [8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700])
     options = data_to_options(selection)
 
     # Pull spot, risk-free, cost-of-carry, these are independent of model
