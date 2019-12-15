@@ -1,13 +1,19 @@
+"""
+Author: Isaac Drachman
+Date:   12/15/2019
+"""
+
 import pandas as pd
 import numpy as np
 import scipy.optimize as opt
 import mc
+import sys
 
 # Read csv data
 def read_data(filename):
     options = pd.read_csv(filename)
 
-    # Accounting rate in %, and compute the cost-of-carry (i.e. div+borrow)
+    # Accounting rate in %, and compute q (i.e. div+borrow)
     # Compute mid-price for each option
     options.Rate /= 100
     options['Q'] = options.Rate - np.log(options.Fwd/options.Spot)/options.TTE
@@ -27,27 +33,29 @@ def select_options(options, date, strikes):
     return options.loc[(options.Date == date) & (options.Strike.isin(strikes))]
 
 class Calibrator:
-    def __init__(self, options, val_params, gen_class):
+    def __init__(self, options, gen_class, val_params={}):
         self.options = options
-        self.val_params = val_params
         self.gen_class = gen_class
+        self.val_params = val_params
+
+        # Default MC specs
+        if self.val_params == {}:
+            self.val_params['num_paths'] = 75000
+            self.val_params['num_steps'] = 100
 
         # Generate all the random variables upfront to speed up computation
-        # So for each iteration of new model params, same initial random variables are used
-        # However, this is model-dependent
-        if self.gen_class == mc.Heston_gen:
-            self.rands = np.random.normal(size=(2,self.val_params['num_paths'],self.val_params['num_steps']))
-        else:
-            self.rands = []
+        # For each iteration of new model params, same initial random variables are used
+        self.rands = self.gen_class({}).gen_rands(self.val_params['num_paths'], self.val_params['num_steps'])
 
-    # updates: list/array of new params
+    # updates:     list/array of new params
     # update_keys: list of keys for each param being updated in 'updates'
-    # model: dictionary of model parameters (static and those being updated)
+    # model:       dictionary of model parameters (static and those being updated)
+    # fixrands:    if True, keeps the random numbers generated when calibrator object was initialized
     def evaluate(self, updates, update_keys, model, fixrands=True):
         num_paths = self.val_params['num_paths']
         num_steps = self.val_params['num_steps']
 
-        # Assumes all options are of the same expiry
+        # Assumes same expiry for all options
         dt = self.options[0].expiry / num_steps
 
         # Update model params we are calibrating
@@ -63,55 +71,105 @@ class Calibrator:
         values = np.array([mc_opt.value(paths=paths) for mc_opt in self.options])
         return values
 
+    # Compute one of 3 loss functions
     def loss(self, updates, update_keys, model, market, fixrands=True):
+        # Price all the options
         px = self.evaluate(updates, update_keys, model, fixrands=fixrands)
-        # Use the average absolute percentage error
-        return np.mean(np.abs(100*(px/market - 1)))
+        if self.val_params['loss'] == 'abserror':
+            # Use the average absolute percentage error
+            return np.mean(np.abs(100*(px/market - 1)))
+        elif self.val_params['loss'] == 'pctinside':
+            # Use the percentage within bid/ask
+            return 1 - len(px[(px > market[0]) & (px < market[1])])/len(px)
+        elif self.val_params['loss'] == 'mse':
+            # Use the mean squared $ error
+            return np.mean((px - market)**2)
 
+    # Gradient descent
+    def run_GD(self,x0,bounds,cons,model,update_keys,market,lossfunc='abserror'):
+        self.val_params['loss'] = lossfunc
+        res = opt.minimize(self.loss, x0, args=(update_keys, model, market), bounds=bounds, constraints=cons)
+        return res['x']
+
+    # Differential evolution
+    def run_DE(self,bounds,model,update_keys,market,lossfunc='abserror',maxiter=50,popsize=15):
+        self.val_params['loss'] = lossfunc
+        res = opt.differential_evolution(self.loss, bounds, args=(update_keys, model, market), maxiter=maxiter, popsize=popsize, disp=True, updating='deferred', workers=-1)
+        return res['x']
+
+    # Helper functions for generating bounds, conditions, and initial states for the various models
+    # I tried to make the bounds somewhat general/wide, not specific to knowing the underlying is NDX
+    # Order: ['nu0','kappa','theta','xi','rho']
     def heston_bounds(self):
-        return [(0.01**2,0.50**2),(0,10),(0.01**2,0.50**2),(0.10,1.50),(-1,0)]
-
-    # Define the Fullner constraint to ensure positive variance
+        # initial vol:     1 to 50 vols
+        # mean-reversion:  0 to 5
+        # longterm mean:   1 to 50 vols
+        # vol-of-vol:      10 to 150 vols
+        # spot/vol correl: -1 to 0
+        return [(0.01**2,0.50**2),(0,5),(0.01**2,0.50**2),(0.10,1.50),(-1,0)]
+    def heston_initial(self):
+        return [0.14**2, 0.9, 0.23**2, 0.30, -0.4]
+    # Define the Feller constraint to ensure positive variance
     def heston_cons(self):
         return [{'type':'ineq', 'fun': lambda x: 2*x[1]*x[2] - x[3]**2}]
 
-    #
-    def run_GD(self,x0,model,update_keys,market,maxiter=50):
-        bounds = self.heston_bounds()
-        cons   = self.heston_cons()
+    # Order: ['sigma','jump','lambda']
+    def gbmjd_bounds(self):
+        # volatility: 1 to 50 vols
+        # jump size:  -10 to +10 %
+        # jump rate:  0 to 10 year/year
+        return [(0.01,0.50),(-0.10,0.10),(0,10)]
 
-        def f(updates):
-            return self.loss(updates,update_keys,model,market)
-        res = opt.minimize(f, x0, bounds=bounds, constrains=cons, options={'maxiter':maxiter})
-        return res['x']
+    # Order: ['mu','sigma','theta','jump','lambda']
+    def oujd_bounds(self):
+        # longterm mean:  $8000 to 9500
+        # annualized vol: $100 to 300
+        # mean-reversion: 0 to 10
+        # jump size:      -$800 to +$800
+        # jump rate:      0 to 10 jumps/year
+        return [(8000,9500),(100,3000),(0,10),(-800,800),(0,10)]
 
-    # bounds: list of 2-tuples for min/max of each parameter being fit
-    def run_DE(self,model,update_keys,market,maxiter=50,popsize=15):
-        bounds = self.heston_bounds()
-
-        def f(updates):
-            return self.loss(updates,update_keys,model,market)
-
-        # run scipy differential_evolution, using multiprocessing
-        res = opt.differential_evolution(f, bounds, maxiter=maxiter, popsize=popsize, disp=True, updating='deferred', workers=-1)
-        return res['x']
-
-def example():
-    # Read data and select specific day & strikes to calibrate off of
+def setup_example(date):
     data = read_data('option_px.csv')
-    selection = select_option(data, '2019-12-06', [7000, 7500, 8000, 8250, 8500, 8750, 9000])
+
+    # I've hardcoded the strikes to be fit
+    selection = select_options(data, date, [7500,7600,7800,7900,8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700,8800,8900,9000])
+    #selection = select_options(data, date, [8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700])
     options = data_to_options(selection)
 
-    # Pull spot, risk-free, cost-of-carry
-    # We don't need to specify initial Heston params when using DE
-    model = {'S0': selection.Spot.iloc[0], 'r': selection.Spot.Rate, 'q': selection.Spot.Q}
+    # Pull spot, risk-free, cost-of-carry, these are independent of model
+    model = {'S0': selection.Spot.iloc[0], 'r': selection.Rate.iloc[0], 'q': selection.Q.iloc[0]}
+    return selection, options, model
 
-    # Initialize Heston calibrator
-    fit_heston = Calibrator(options, {'num_paths': 25000, 'num_steps': 100}, mc.Heston_gen)
-    update_keys = ['nu0','kappa','theta','xi','rho']
+# Usage: python project.py 2019-12-06 heston [mse|abserror] [gd|de]
+if __name__ == '__main__':
+    selection, options, model = setup_example(sys.argv[1])
+    lossfunc = 'abserror' if len(sys.argv) < 4 else sys.argv[3]
+    algo = 'gd' if len(sys.argv) == 5 and sys.argv[4] == 'gd' else 'de'
+    if sys.argv[2] == 'heston':
+        calibrator = Calibrator(options, mc.Heston_gen)
+        update_keys = ['nu0','kappa','theta','xi','rho']
+        if algo == 'de':
+            res = calibrator.run_DE(calibrator.heston_bounds(), model, update_keys, selection.Mid.values, lossfunc=lossfunc)
+        elif algo == 'gd':
+            res = calibrator.run_GD(calibrator.heston_initial(), calibrator.heston_bounds(), calibrator.heston_cons(), model, update_keys, selection.Mid.values, lossfunc=lossfunc)
+    elif sys.argv[2] == 'gbmjd':
+        calibrator = Calibrator(options, mc.GBMJD_gen)
+        update_keys = ['sigma','jump','lambda']
+        res = calibrator.run_DE(calibrator.gbmjd_bounds(), model, update_keys, selection.Mid.values, lossfunc=lossfunc)
+    elif sys.argv[2] == 'oujd':
+        calibrator = Calibrator(options, mc.OUJD_gen)
+        update_keys = ['mu','sigma','theta','jump','lambda']
+        res = calibrator.run_DE(calibrator.oujd_bounds(), model, update_keys, selection.Mid.values, lossfunc=lossfunc)
 
-    # Initial guess
-    x0 = [0.17**2, 1.0, 0.20**2, 0.40, -0.90]
+    # Build output, print some stats, and save to csv
+    px  = calibrator.evaluate(res, update_keys, model)
+    selection['predicted'] = px
+    selection['error/px'] = np.abs(px - selection.Mid.values)/selection.Mid.values
+    selection['error/spot'] = np.abs(px - selection.Mid.values)/selection.Spot.iloc[0]
 
-    # Fit
-    res = fit_GD(x0,model,update_keys,selection.Mid.values)
+    print('result: '+str(res))
+    print('avg. %% error: %0.2f%%'%(100*selection['error/px'].mean()))
+    print('avg. $ error: $%0.2f (%0.2f%% vs spot)'%((selection['error/px']*selection.Mid.values).mean(),100*selection['error/spot'].mean()))
+    selection.to_csv('prices_%s_%s_%s_%s.csv'%(sys.argv[1],sys.argv[2],lossfunc,algo))
+    pd.DataFrame([res],columns=update_keys).to_csv('results_%s_%s_%s_%s.csv'%(sys.argv[1],sys.argv[2],lossfunc,algo))

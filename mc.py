@@ -1,11 +1,21 @@
 import numpy as np
 import copy
+import mcx
 
-def pos_or_zero(x):
-    return np.vectorize(max)(x,0)
-
-def fullner(kappa,theta,xi):
+# Feller condition for Heston to ensure positive variance process
+def feller(kappa,theta,xi):
     return 2*kappa*theta > xi**2
+
+# Inverse transform sampling from https://en.wikipedia.org/wiki/Poisson_distribution#Generating_Poisson-distributed_random_variables
+def inverse_transform_sampling(lam,u):
+    x = 0
+    p = np.exp(-lam)
+    s = p
+    while u > s:
+        x += 1
+        p *= lam/x
+        s += p
+    return x
 
 class Generator:
     def __init__(self, params):
@@ -37,60 +47,62 @@ class GBM_gen(Generator):
         return paths
 
 class GBMJD_gen(Generator):
-    # Required params: S0,r,q,sigma,j_mu,lambda
+    # Required params: S0,r,q,sigma,jump,lambda
     def __init__(self, params):
         Generator.__init__(self, params)
-    def generate(self, num_paths, num_steps, dt):
+    def gen_rands(self, num_paths, num_steps):
+        #return np.random.normal(size=(num_paths,num_steps)), np.random.uniform(size=(num_paths,num_steps))
+        return []
+    def generate(self, num_paths, num_steps, dt, rands=[]):
         paths = Generator.generate(self, num_paths, num_steps, dt)
 
         S0,r,q,sigma = self.params['S0'],self.params['r'],self.params['q'],self.params['sigma']
-        jump,lam = self.params['j_mu'],self.params['lambda']
+        jump,lam = self.params['jump'],self.params['lambda']
 
-        noise = sigma*np.sqrt(dt)*np.random.normal(size=(num_paths,num_steps))
-        poiss = np.random.poisson(lam, size=(num_paths,num_steps))
-        paths[:,0] = S0
-        for t in range(1,num_steps):
-            paths[:,t] = paths[:,t-1]*(1 + (r-q)*dt + noise[:,t] + jump*poiss[:,t])
-        return paths
+        #rands = self.gen_rands(num_paths, num_steps) if len(rands) == 0 else rands
+        #noise = sigma*np.sqrt(dt)*rands[0]
+        #poiss = np.vectorize(inverse_transform_sampling)(lam*dt, rands[1])
+        noise = np.random.normal(size=(num_paths, num_steps))
+        poiss = np.random.poisson(lam*dt, size=(num_paths, num_steps)).astype(np.float64)
+
+        return mcx.gbmjd_step(S0, r, q, sigma, jump, dt, num_paths, num_steps, noise, poiss)
 
 class OUJD_gen(Generator):
-    # Required params: S0,mu,theta,sigma,j_mu,lambda
+    # Required params: S0,mu,theta,sigma,jump,lambda
     def __init__(self, params):
         Generator.__init__(self, params)
-    def generate(self, num_paths, num_steps, dt):
-        paths = Generator.generate(self, num_paths, num_steps, dt)
-
+    def gen_rands(self, num_paths, num_steps):
+        #return np.random.normal(size=(num_paths,num_steps)), np.random.uniform(size=(num_paths,num_steps))
+        return []
+    def generate(self, num_paths, num_steps, dt, rands=[]):
         S0,mu,theta,sigma = self.params['S0'],self.params['mu'],self.params['theta'],self.params['sigma']
-        jump,lam = self.params['j_mu'],self.params['lambda']
+        jump,lam = self.params['jump'],self.params['lambda']
 
-        noise = sigma*np.sqrt(dt)*np.random.normal(size=(num_paths,num_steps))
-        poiss = np.random.poisson(lam, size=(num_paths,num_steps))
-        paths[:,0] = S0
-        for t in range(1,num_steps):
-            paths[:,t] = paths[:,t-1] + theta*(mu - paths[:,t-1])*dt + noise[:,t] + jump*poiss[:,t]
-        return paths
+        #rands = self.gen_rands(num_paths, num_steps) if len(rands) == 0 else rands
+        #noise = sigma*np.sqrt(dt)*rands[0]
+        #poiss = np.vectorize(inverse_transform_sampling)(lam*dt, rands[1])
+        noise = np.random.normal(size=(num_paths,num_steps))
+        poiss = np.random.poisson(lam*dt, size=(num_paths,num_steps)).astype(np.float64)
+
+        return mcx.oujd_step(S0, mu, theta, sigma, jump, dt, num_paths, num_steps, noise, poiss)
 
 class Heston_gen(Generator):
     # Required params: S0,r,q,nu0,kappa,theta,xi,rho
     def __init__(self, params):
         Generator.__init__(self, params)
+    # Generate appropriate shape/type random variables
+    def gen_rands(self, num_paths, num_steps):
+        return np.random.normal(size=(2,num_paths,num_steps))
     def generate(self, num_paths, num_steps, dt, rands=[]):
-        paths = Generator.generate(self, num_paths, num_steps, dt)
-
         S0,r,q,nu0 = self.params['S0'],self.params['r'],self.params['q'],self.params['nu0']
         kappa,theta,xi,rho = self.params['kappa'],self.params['theta'],self.params['xi'],self.params['rho']
 
-        dW_S  = np.random.normal(size=(num_paths,num_steps)) if len(rands) == 0 else rands[0]
-        dW_X  = np.random.normal(size=(num_paths,num_steps)) if len(rands) == 0 else rands[1]
-        dW_nu = rho*dW_S + np.sqrt(1 - rho**2)*dW_X
+        rands = self.gen_rands(num_paths, num_steps) if len(rands) == 0 else rands
+        dW_S = rands[0]
+        dW_X = rands[1]
 
-        nu = np.zeros((num_paths,num_steps))
-        nu[:,0] = nu0
-        paths[:,0] = S0
-        for t in range(1,num_steps):
-            nu[:,t] = nu[:,t-1] + kappa*(theta - pos_or_zero(nu[:,t-1]))*dt + xi*np.sqrt(pos_or_zero(nu[:,t-1])*dt)*dW_nu[:,t]
-            paths[:,t] = paths[:,t-1]*(1 + (r-q)*dt + np.sqrt(pos_or_zero(nu[:,t])*dt)*dW_S[:,t])
-        return paths
+        # Run cython routine
+        return mcx.heston_step(S0,nu0,kappa,theta,xi,rho,dt,r,q,num_paths,num_steps,dW_S,dW_X)
 
 class Option:
     def __init__(self, strike, expiry, PC, AE, val_params):
@@ -107,6 +119,7 @@ class Option:
         if gen is None and paths is None:
             raise Exception('either MCgen or paths required')
 
+        # Instead of re-running the generator, check if we've been given paths already
         if paths is None:
             num_paths = self.val_params['num_paths']
             num_steps = self.val_params['num_steps']
@@ -114,7 +127,8 @@ class Option:
 
             paths = gen.generate(num_paths, num_steps, dt)
         values = self.payoff(paths[:,-1])
-        return np.exp(-self.val_params['r']*self.expiry)*values.mean() # values.std()/np.sqrt(num_paths)
+        # Discount the expected payoff
+        return np.exp(-self.val_params['r']*self.expiry)*values.mean()
 
     def delta(self, gen, bump=0.01):
         value_S = self.value(gen)
