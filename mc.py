@@ -41,15 +41,21 @@ class GBM_gen(Generator):
     # Required params: S0,r,q,sigma
     def __init__(self, params):
         Generator.__init__(self, params)
+    def gen_rands(self, num_paths, num_steps):
+        return np.random.normal(size=(num_paths,num_steps))
     def generate(self, num_paths, num_steps, dt, rands=[]):
-        paths = Generator.generate(self, num_paths, num_steps, dt)
         S0,r,q,sigma = self.params['S0'],self.params['r'],self.params['q'],self.params['sigma']
 
-        noise = sigma*np.sqrt(dt)*np.random.normal(size=(num_paths,num_steps)) if len(rands) == 0 else rands
-        paths[:,0] = S0
+        noise = np.random.normal(size=(num_paths,num_steps)) if len(rands) == 0 else rands
+
+        """
+        # Original native python
+        paths = np.zeros((num_paths, num_steps)) + S0
         for t in range(1,num_steps):
-            paths[:,t] = paths[:,t-1]*(1 + (r-q)*dt + noise[:,t])
-        return paths
+            paths[:,t] = paths[:,t-1]*(1 + (r-q)*dt + sigma*np.sqrt(dt)*noise[:,t])
+        """
+
+        return np.array(mcx.gbm_step(S0, r, q, sigma, dt, num_paths, num_steps, noise))
 
 class GBMJD_gen(Generator):
     # Required params: S0,r,q,sigma,jump,lambda
@@ -78,7 +84,7 @@ class GBMJD_gen(Generator):
         return paths
         """
 
-        return mcx.gbmjd_step(S0, r, q, sigma, jump, dt, num_paths, num_steps, noise, poiss)
+        return np.array(mcx.gbmjd_step(S0, r, q, sigma, jump, dt, num_paths, num_steps, noise, poiss))
 
 class OUJD_gen(Generator):
     # Required params: S0,mu,theta,sigma,jump,lambda
@@ -105,7 +111,7 @@ class OUJD_gen(Generator):
         return paths
         """
 
-        return mcx.oujd_step(S0, mu, theta, sigma, jump, dt, num_paths, num_steps, noise, poiss)
+        return np.array(mcx.oujd_step(S0, mu, theta, sigma, jump, dt, num_paths, num_steps, noise, poiss))
 
 class Heston_gen(Generator):
     # Required params: S0,r,q,nu0,kappa,theta,xi,rho
@@ -135,7 +141,7 @@ class Heston_gen(Generator):
         return paths
         """
         # Run cython routine
-        return mcx.heston_step(S0,nu0,kappa,theta,xi,rho,dt,r,q,num_paths,num_steps,dW_S,dW_X)
+        return np.array(mcx.heston_step(S0,nu0,kappa,theta,xi,rho,dt,r,q,num_paths,num_steps,dW_S,dW_X))
 
 class Option:
     def __init__(self, strike, expiry, PC, AE, val_params):

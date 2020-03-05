@@ -1,4 +1,5 @@
 /.ipynb_checkpoints/*
+/prosper/*
 /build/*
 intraday_disp.ipynb
 spx_top20_intraday_2019_12_11.csv

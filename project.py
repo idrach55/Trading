@@ -110,11 +110,7 @@ class Calibrator:
     # I tried to make the bounds somewhat general/wide, not specific to knowing the underlying is NDX
     # Order: ['nu0','kappa','theta','xi','rho']
     def heston_bounds(self):
-        # initial vol:     1 to 50 vols
-        # mean-reversion:  0 to 5
-        # longterm mean:   1 to 50 vols
-        # vol-of-vol:      10 to 150 vols
-        # spot/vol correl: -1 to 0
+        # initial vol: 1 to 50 vols, reversion: 0 to 5, mean: 1 to 50 vols, vol-of-vol: 10 to 150 vols, spot/vol correl: -1 to 0
         return [(0.01**2,0.50**2),(0,5),(0.01**2,0.50**2),(0.10,1.50),(-1,0)]
     def heston_initial(self):
         return [0.14**2, 0.9, 0.23**2, 0.30, -0.4]
@@ -124,18 +120,12 @@ class Calibrator:
 
     # Order: ['sigma','jump','lambda']
     def gbmjd_bounds(self):
-        # volatility: 1 to 50 vols
-        # jump size:  -10 to +10 %
-        # jump rate:  0 to 10 year/year
+        # vol: 1 to 50 vols, jump size: -10 to +10%, jump rate: 0 to 10 /year
         return [(0.01,0.50),(-0.10,0.10),(0,10)]
 
     # Order: ['mu','sigma','theta','jump','lambda']
     def oujd_bounds(self):
-        # longterm mean:  $8000 to 9500
-        # annualized vol: $100 to 300
-        # mean-reversion: 0 to 10
-        # jump size:      -$800 to +$800
-        # jump rate:      0 to 10 jumps/year
+        # mean: $8000 to 9500, vol: $100 to 300, reversion: 0 to 10, jump size: -$800 to +$800, jump rate: 0 to 10 /year
         return [(8000,9500),(100,3000),(0,10),(-800,800),(0,10)]
 
 def setup_example(date):
@@ -145,7 +135,8 @@ def setup_example(date):
     # 25 options (wide range)
     #selection = select_options(data, date, [7500,7600,7800,7900,8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700,8800,8900,9000])
     # 18 options (tight range)
-    selection = select_options(data, date, [8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700])
+    #selection = select_options(data, date, [8000,8100,8200,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8600,8700])
+    selection = select_options(data, date, [8125,8150,8175,8200,8225,8250,8275,8300,8325,8350,8375,8400,8425,8450,8475,8500,8525,8550,8575,8600,8625,8650,8675])
     options = data_to_options(selection)
 
     # Pull spot, risk-free, cost-of-carry, these are independent of model

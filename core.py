@@ -24,6 +24,17 @@ def variance_swap_payout(S_t, K, var_n=None, vega_n=None, cap=None):
         return (min(realized_vol(S_t)**2,(cap*K)**2) - K**2)*var_n
     return (realized_vol(S_t)**2 - K**2)*var_n
 
+def ko_var_payout(S_t, N, B, K, var_n=None, vega_n=None):
+    if vega_n is not None:
+        var_n = vega_n / (2*K) * 100
+    px = S_t.iloc[:N+1]
+    vr = (np.log(S_t/S_t.shift(1))**2).iloc[1:N+1]
+    x = N
+    ko = px.loc[px >= B*px.iloc[0]]
+    if len(ko) > 0:
+        x = len(px.loc[:ko.index[0]]) - 1
+    return (vr[:x].mean()*252 - K**2)*x/N*var_n
+
 """
 Basic Black Scholes valuation/greeks
 K   : strike
