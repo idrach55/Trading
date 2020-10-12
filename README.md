@@ -13,4 +13,4 @@ Other Research
 
 Monte Carlo
 - vanilla option pricing using monte carlo where underlying process can be non-GBM, <code>mc.py</code> and <code>mc_example.ipynb</code>
-- processes include Ornstein-Uhlenbeck (mean-reverting), and GBM+Jump
+- processes include GBM (Brownian motion), GBMJD (Brownian motion + jump), OU (mean-reverting), OUJD (mean-reverting + jump)
