@@ -1,4 +1,4 @@
-# Gradient
+# Trading
 
 Strategy Backtests
 - Jupyter notebooks for simple payoff backtests (i.e. no m2m)
