@@ -1,3 +1,8 @@
+"""
+Author: Isaac Drachman
+Created: 6/1/2021
+"""
+
 import time
 import requests
 import numpy as np
@@ -6,6 +11,7 @@ import scipy.optimize as opt
 import scipy.stats as stats 
 import pickle
 
+# Connect to my stock data API.
 import sys
 sys.path.append('/Users/isaacdrachman/GitHub/')
 from portfolio import risk, analytics
@@ -20,6 +26,9 @@ def read_keys(service: str):
     return api_key, secret_key
 
 def get_alpaca_price(symbol: str) -> float:
+    """
+    Use Alpaca (automated brokerage) API to pull live common/warrant prices.
+    """
     api_key, secret_key = read_keys('alpaca')
     headers = {'APCA-API-KEY-ID': api_key, 'APCA-API-SECRET-KEY': secret_key}
     url = f'https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest'
@@ -40,28 +49,28 @@ def get_alpaca_prices(symbols: List[str]) -> List[float]:
             prices.append(np.nan)
     return prices
 
- 
-def xgb_price(spot: float, vol: float, mdl=None):
-    # Model trained on term=5.0, r=0.0080, q=0.00
+
+"""
+Functions using trained XGB model to price warrants, compute delta/vega risks, and imply volatility.
+"""
+def xgb_price(spot: float, vol: float, mdl=None) -> float:
+    # XGB model trained on term=5.0, r=0.0080, q=0.00
     mdl = mdl if mdl is not None else pickle.load(open('warrant-mdl-noisy.obj','rb'))
     bs = bs_price(spot, 5.0, vol)
     return mdl.predict(pd.DataFrame({'spot': spot, 'vol': vol},index=[0]))[0] * bs
 
-
-def xgb_delta(spot: float, vol: float, mdl=None, bump=0.01):
-    # Delta shares.
+def xgb_delta(spot: float, vol: float, mdl=None, bump=0.01) -> float:
+    # Delta shares computed numerically using XGB model.
     mdl = mdl if mdl is not None else pickle.load(open('warrant-mdl-noisy.obj','rb'))
     px_up = mdl.predict(pd.DataFrame({'spot': spot*(1.0 + bump), 'vol': vol},index=[0]))[0] * bs_price(spot*(1.0 + bump), 5.0, vol)
     px_dn = mdl.predict(pd.DataFrame({'spot': spot*(1.0 - bump), 'vol': vol},index=[0]))[0] * bs_price(spot*(1.0 - bump), 5.0, vol)
     return (px_up - px_dn) / (2 * bump) / spot
-
 
 def xgb_vega(spot: float, vol: float, mdl=None):
     mdl = mdl if mdl is not None else pickle.load(open('warrant-mdl-noisy.obj','rb'))
     px_up = mdl.predict(pd.DataFrame({'spot': spot, 'vol': vol + 0.01},index=[0]))[0] * bs_price(spot, 5.0, vol + 0.01)
     px_dn = mdl.predict(pd.DataFrame({'spot': spot, 'vol': vol - 0.01},index=[0]))[0] * bs_price(spot, 5.0, vol - 0.01)
     return (px_up - px_dn) / 2
-
 
 def xgb_iv(price: float, spot: float):
     # Model trained on term=5.0, r=0.0080, q=0.00
@@ -76,16 +85,17 @@ def xgb_iv(price: float, spot: float):
     return opt.brentq(internal, 0.08, 1.00)
 
 
+"""
+MC methods.
+"""
 def mc_paths(spot: float, term: float, vol: float, noise: np.array, r: float = 0.0080, q: float = 0.00) -> np.array:
     return spot * (1.0 + (r - q)/252.0 + vol*np.sqrt(1.0/252.0)*noise).cumprod(axis=1)
 
-
 def mc_price(spot: float, term: float, vol: float, noise: np.array, r: float = 0.0080, q: float = 0.00, 
-             strike: float = 11.5, ko: float = 18.0) -> float:
+             strike: float = 11.5, ko: float = 18.0) -> np.array:
     """
     Price warrant using monte-carlo as a daily up-and-out call.
-    """
-    
+    """ 
     paths = mc_paths(spot, term, vol, noise, r=r, q=q)
 
     pvs = np.zeros(paths.shape[0])
@@ -101,16 +111,13 @@ def mc_price(spot: float, term: float, vol: float, noise: np.array, r: float = 0
             pvs[idx_path] = np.exp(-r * idx_ko/252) * paths[idx_path][idx_ko] - strike
     return pvs
 
-
 def mc_price2(spot: float, term: float, vol: float, noise: np.array, r: float = 0.0080, q: float = 0.00,
-              strike: float = 11.5, ko: float = 18.0, ko_days: int = 20, ko_window: int = 30):
+              strike: float = 11.5, ko: float = 18.0, ko_days: int = 20, ko_window: int = 30) -> np.array:
     paths = mc_paths(spot, term, vol, noise, r=r, q=q)
     """
     Price warrant using monte-carlo with more accurate knock-out condition, i.e. 20 days out of 30 above barrier.
-
     WARN: This is super slow. Need to do better, even for training xgb.
     """
-
     pvs = np.zeros(paths.shape[0])
     for idx_path in range(paths.shape[0]):
         # If this has no chance of knocking-out (ie < 20 days above KO), then cut to expiry valuation.
@@ -126,19 +133,21 @@ def mc_price2(spot: float, term: float, vol: float, noise: np.array, r: float = 
             if idx_step == paths.shape[1] - 1:
                 pvs[idx_path] = np.exp(-r * term) * max(paths[idx_path][idx_step] - strike, 0.0)
     return pvs
-    
-
-def bs_price(spot: float, term: float, vol: float, r: float = 0.0080, q: float = 0.00, strike: float = 11.5) -> float:
-    d1 = (np.log(spot / strike) + (r + vol**2/2)*term)/(vol*np.sqrt(term))
-    d2 = d1 - vol*np.sqrt(term)
-    return stats.norm.cdf(d1) * spot - stats.norm.cdf(d2) * strike * np.exp(-r * term)
-
 
 def mc_iv(price: float, spot: float, term: float, noise: np.array, r: float = 0.0080, q: float = 0.00, 
           strike: float = 11.5, ko: float = 18.0) -> float:
     def internal(vol):
         return mc_price(spot, term, vol, noise, r=r, q=q, strike=strike, ko=ko).mean() - price
     return opt.brentq(internal, 0.01, 1.50)
+    
+
+def bs_price(spot: float, term: float, vol: float, r: float = 0.0080, q: float = 0.00, strike: float = 11.5) -> float:
+    """
+    Price vanilla call using Black-Scholes.
+    """
+    d1 = (np.log(spot / strike) + (r + vol**2/2)*term)/(vol*np.sqrt(term))
+    d2 = d1 - vol*np.sqrt(term)
+    return stats.norm.cdf(d1) * spot - stats.norm.cdf(d2) * strike * np.exp(-r * term)
 
 
 def read_positions(fname: str):
