@@ -7,6 +7,5 @@ Strategy Backtests
 - palladium (call on dispersion) <code>strat_palladium.ipynb</code>
 
 Other Research
-- Predicting realized variance spreads using linear reg or simple neural net <code>relative_value.ipynb</code>
 - Looking for dislocations of SX5E dividend futures and dividend term structure as a result of structured products <code>strat_sx5edivs.ipynb</code>
 - Modeling empirical non-normality of one-day stock returns <code>stocks.ipynb</code>
